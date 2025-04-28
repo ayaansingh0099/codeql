@@ -403,10 +403,14 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
 
       predicate typeParametersEqual(TypeAbstraction abs, App app, TypeMention term, TypeParameter tp) {
         potentialInstantiationOf(abs, app, term) and
-        exists(int n | n = max(int i | exists(getNthTypeParameterPath(abs, term, tp, i))) |
-          // If the largest index is 0, then there are no equalities to check as
-          // the type parameter only occurs once.
-          if n = 0 then any() else typeParametersEqualFromIndex(abs, app, tp, term, n)
+        (
+          not exists(getNthTypeParameterPath(abs, term, tp, _))
+          or
+          exists(int n | n = max(int i | exists(getNthTypeParameterPath(abs, term, tp, i))) |
+            // If the largest index is 0, then there are no equalities to check as
+            // the type parameter only occurs once.
+            if n = 0 then any() else typeParametersEqualFromIndex(abs, app, tp, term, n)
+          )
         )
       }
 

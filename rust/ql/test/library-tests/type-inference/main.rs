@@ -156,7 +156,7 @@ mod method_non_parametric_trait_impl {
     struct S1;
     #[derive(Debug, Clone, Copy)]
     struct S2;
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     struct S3;
 
     trait MyTrait<A> {
@@ -193,6 +193,18 @@ mod method_non_parametric_trait_impl {
         // MyThing<S2>::m1
         fn m1(self) -> Self {
             Self { a: self.a } // $ fieldof=MyThing
+        }
+    }
+
+    // Implementation where the type parameter `TD` only occurs in the
+    // implemented trait and not the implementing type.
+    impl<TD> MyTrait<TD> for MyThing<S3>
+    where
+        TD: Default,
+    {
+        // MyThing<S3>::m1
+        fn m1(self) -> TD {
+            TD::default()
         }
     }
 
@@ -279,11 +291,14 @@ mod method_non_parametric_trait_impl {
     pub fn f() {
         let thing_s1 = MyThing { a: S1 };
         let thing_s2 = MyThing { a: S2 };
+        let thing_s3 = MyThing { a: S3 };
 
         // Tests for method resolution
 
         println!("{:?}", thing_s1.m1()); // $ MISSING: method=MyThing<S1>::m1
         println!("{:?}", thing_s2.m1().a); // $ MISSING: method=MyThing<S2>::m1 fieldof=MyThing
+        let s3: S3 = thing_s3.m1(); // $ MISSING: method=MyThing<S3>::m1
+        println!("{:?}", s3);
 
         let p1 = MyPair { p1: S1, p2: S1 };
         println!("{:?}", p1.m1()); // $ MISSING: method=MyTrait<I>::m1
@@ -1070,6 +1085,42 @@ mod borrowed_typed {
         x.f1(); // $ method=f1
         x.f2(); // $ method=f2
         S::f3(&x);
+    }
+}
+
+mod encoder {
+    #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    pub struct LinesCodec {
+        is_discarding: bool,
+    }
+
+    impl LinesCodec {
+        pub fn new() -> LinesCodec {
+            LinesCodec {
+                is_discarding: false,
+            }
+        }
+    }
+
+    pub trait Encoder<Item> {
+        fn encode(&mut self, item: Item) -> bool;
+    }
+
+    // Implementation where the type parameter `T` only occurs in the
+    // implemented trait and not the implementing type.
+    impl<T> Encoder<T> for LinesCodec
+    where
+        T: AsRef<str>,
+    {
+        // LinesCodec::encode
+        fn encode(&mut self, _line: T) -> bool {
+            "hello".eq(_line.as_ref())
+        }
+    }
+
+    fn lines_encoder() {
+        let mut codec = LinesCodec::new();
+        codec.encode("line 1"); // $ method=LinesCodec::encode
     }
 }
 
