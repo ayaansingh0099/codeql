@@ -318,7 +318,7 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
      * `constraint`.
      */
     predicate typeMentionSatisfiesConstraint(
-      TypeAbstraction abs, TypeMention typeMention, TypeMention constraint
+      TypeAbstraction abs, TypeMention condition, TypeMention constraint
     );
   }
 
@@ -382,11 +382,12 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
           )
       }
 
-      TypePath getNthTypeParameterPath(
-        TypeAbstraction abs, TypeMention term, TypeParameter tp, int i
-      ) {
-        tp = abs.getATypeParameter() and
-        result = rank[i + 1](TypePath path | tp = term.resolveTypeAt(path) | path)
+      /**
+       * Gets the path to the `i`th occurrence of `tp` within `tm` per some
+       * arbitrary order, if any.
+       */
+      TypePath getNthTypeParameterPath(TypeMention tm, TypeParameter tp, int i) {
+        result = rank[i + 1](TypePath path | tp = tm.resolveTypeAt(path) | path)
       }
 
       predicate typeParametersEqualFromIndex(
@@ -394,8 +395,8 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
       ) {
         potentialInstantiationOf(abs, app, term) and
         exists(TypePath path, TypePath nextPath |
-          path = getNthTypeParameterPath(abs, term, tp, i) and
-          nextPath = getNthTypeParameterPath(abs, term, tp, i - 1) and
+          path = getNthTypeParameterPath(term, tp, i) and
+          nextPath = getNthTypeParameterPath(term, tp, i - 1) and
           app.resolveTypeAt(path) = app.resolveTypeAt(nextPath) and
           if i = 1 then any() else typeParametersEqualFromIndex(abs, app, tp, term, i - 1)
         )
@@ -403,10 +404,11 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
 
       predicate typeParametersEqual(TypeAbstraction abs, App app, TypeMention term, TypeParameter tp) {
         potentialInstantiationOf(abs, app, term) and
+        tp = getNthTypeParameter(abs, _) and
         (
-          not exists(getNthTypeParameterPath(abs, term, tp, _))
+          not exists(getNthTypeParameterPath(term, tp, _))
           or
-          exists(int n | n = max(int i | exists(getNthTypeParameterPath(abs, term, tp, i))) |
+          exists(int n | n = max(int i | exists(getNthTypeParameterPath(term, tp, i))) |
             // If the largest index is 0, then there are no equalities to check as
             // the type parameter only occurs once.
             if n = 0 then any() else typeParametersEqualFromIndex(abs, app, tp, term, n)
@@ -461,7 +463,7 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
     /** Provides logic related to base types. */
     private module BaseTypes {
       /**
-       * If `term1` is considered instantiation of `term2` then at the type
+       * If `term1` is considered an instantiation of `term2` then at the type
        * parameter `tp` is has the type `t` at `path`.
        *
        * For instance the type `Map<int, List<int>>` is considered an instantion
@@ -874,56 +876,53 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
       }
 
       private module AccessConstraint {
-        /**
-         * If the access `a` for `apos` and `path` has the root type `type` and
-         * type inference requires it to satisfy the constraint `constraint`.
-         */
-        private predicate relevantAccess(
-          Access a, AccessPosition apos, TypePath path, Type type, Type constraint
-        ) {
-          exists(Declaration target, DeclarationPosition dpos |
-            target = a.getTarget() and
-            type = a.getInferredType(apos, path) and
-            accessDeclarationPositionMatch(apos, dpos) and
-            typeParameterConstraintHasTypeParameter(target, dpos, path, _, constraint, _, _)
-          )
-        }
-
-        newtype TTRelevantAccess =
-          TRelevantAccess(Access a, AccessPosition apos, TypePath path) {
-            relevantAccess(a, apos, path, _, _)
+        private newtype TTRelevantAccess =
+          TRelevantAccess(Access a, AccessPosition apos, TypePath path, Type constraint) {
+            exists(DeclarationPosition dpos |
+              accessDeclarationPositionMatch(apos, dpos) and
+              typeParameterConstraintHasTypeParameter(a.getTarget(), dpos, path, _, constraint, _, _)
+            )
           }
 
-        class RelevantAccess extends TTRelevantAccess {
+        /**
+         * If the access `a` for `apos` and `path` has the inferred root type
+         * `type` and type inference requires it to satisfy the constraint
+         * `constraint`.
+         */
+        private class RelevantAccess extends TTRelevantAccess {
           Access a;
           AccessPosition apos;
-          TypePath pathToSub;
+          TypePath path;
+          Type constraint0;
 
-          RelevantAccess() { this = TRelevantAccess(a, apos, pathToSub) }
+          RelevantAccess() { this = TRelevantAccess(a, apos, path, constraint0) }
 
-          Type resolveTypeAt(TypePath path) {
-            a.getInferredType(apos, pathToSub.append(path)) = result
+          Type resolveTypeAt(TypePath suffix) {
+            a.getInferredType(apos, path.append(suffix)) = result
+          }
+
+          /** Holds if this relevant access has the type `type` and should satisfy `constraint`. */
+          predicate hasTypeConstraint(Type type, Type constraint) {
+            type = a.getInferredType(apos, path) and
+            constraint = constraint0
           }
 
           string toString() {
-            result = a.toString() + ", " + apos.toString() + ", " + pathToSub.toString()
+            result = a.toString() + ", " + apos.toString() + ", " + path.toString()
           }
 
           Location getLocation() { result = a.getLocation() }
         }
 
-        module IsInstantiationOfInput implements IsInstantiationOfSig<RelevantAccess> {
-          predicate potentialInstantiationOf(TypeAbstraction abs, RelevantAccess at, TypeMention sub) {
-            // We only need to check instantiations where there are multiple candidates.
-            exists(
-              TypeMention constraintMention, Access a, AccessPosition apos, TypePath pathToSub,
-              Type type
-            |
-              type = resolveTypeMentionRoot(sub) and
-              at = TRelevantAccess(a, apos, pathToSub) and
-              relevantAccess(a, apos, pathToSub, type, resolveTypeMentionRoot(constraintMention)) and
-              typeSatisfiesConstraintTrans(abs, sub, constraintMention, _, _) and
-              countConstraintImplementations(type, resolveTypeMentionRoot(constraintMention)) > 1
+        private module IsInstantiationOfInput implements IsInstantiationOfSig<RelevantAccess> {
+          predicate potentialInstantiationOf(
+            TypeAbstraction abs, RelevantAccess at, TypeMention cond
+          ) {
+            exists(Type constraint, Type type |
+              at.hasTypeConstraint(type, constraint) and
+              typeToTypeMention(type, constraint, abs, cond, _) and
+              // We only need to check instantiations where there are multiple candidates.
+              countConstraintImplementations(type, constraint) > 1
             )
           }
         }
@@ -932,11 +931,10 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
          * The type at `a`, `apos`, `pathToSub` satisfies `constraint` through
          * `abs`, `sub`, and `constraintMention`.
          */
-        predicate hasConstraintMention(
-          Access a, AccessPosition apos, TypePath pathToSub, Type constraint, TypeAbstraction abs,
-          TypeMention sub, TypeMention constraintMention
+        private predicate hasConstraintMention(
+          RelevantAccess at, TypeAbstraction abs, TypeMention sub, TypeMention constraintMention
         ) {
-          exists(Type type | relevantAccess(a, apos, pathToSub, type, constraint) |
+          exists(Type type, Type constraint | at.hasTypeConstraint(type, constraint) |
             not exists(countConstraintImplementations(type, constraint)) and
             typeSatisfiesConstraintTrans(abs, sub, constraintMention, _, _) and
             resolveTypeMentionRoot(sub) = abs.getATypeParameter() and
@@ -949,8 +947,8 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
             // one where the type instantiates the precondition.
             if countConstraintImplementations(type, constraint) > 1
             then
-              IsInstantiationOf<RelevantAccess, IsInstantiationOfInput>::isInstantiationOf(TRelevantAccess(a,
-                  apos, pathToSub), abs, sub)
+              IsInstantiationOf<RelevantAccess, IsInstantiationOfInput>::isInstantiationOf(at, abs,
+                sub)
             else any()
           )
         }
@@ -966,8 +964,8 @@ module Make1<LocationSig Location, InputSig1<Location> Input1> {
             RelevantAccess at, TypeAbstraction abs, TypeMention sub, Type t0, TypePath prefix,
             TypeMention constraintMention
           |
-            at = TRelevantAccess(a, apos, pathToSub) and
-            hasConstraintMention(a, apos, pathToSub, constraint, abs, sub, constraintMention) and
+            at = TRelevantAccess(a, apos, pathToSub, constraint) and
+            hasConstraintMention(at, abs, sub, constraintMention) and
             typeSatisfiesConstraintTrans(abs, sub, constraintMention, prefix, t0) and
             (
               not t0 = abs.getATypeParameter() and t = t0 and path = prefix
