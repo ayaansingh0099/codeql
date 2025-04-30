@@ -17,6 +17,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
+use std::{env, fs};
 use tracing::{error, info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -276,5 +277,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    let builtins_dir = env::var("CODEQL_EXTRACTOR_RUST_ROOT")
+        .map(|path| Path::new(&path).join("tools").join("builtins"))?;
+    let builtins = fs::read_dir(builtins_dir).context("failed to read builtins directory")?;
+    for entry in builtins {
+        let entry = entry.context("failed to read builtins directory")?;
+        extractor.extract_without_semantics(&entry.path(), "builtins");
+    }
+
     extractor.emit_extraction_diagnostics(start, &cfg)
 }
